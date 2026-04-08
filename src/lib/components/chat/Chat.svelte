@@ -64,7 +64,8 @@
 		getTagsById,
 		updateChatById
 	} from '$lib/apis/chats';
-	import { generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { fetchAgentLayerChatCompletion, generateOpenAIChatCompletion } from '$lib/apis/openai';
+	import { getAgentLayerUpstream } from '$lib/utils/agentLayerConnection';
 	import { processWeb, processWebSearch, processYoutubeVideo } from '$lib/apis/retrieval';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 	import { queryMemory } from '$lib/apis/memories';
@@ -90,6 +91,18 @@
 	import Spinner from '../common/Spinner.svelte';
 
 	export let chatIdProp = '';
+
+	/**
+	 * When non-null, the model dropdown is limited to this list (e.g. agent-layer workspace models only).
+	 * Default null keeps the full global model list (normal chat).
+	 */
+	export let modelPickerModels: Model[] | null = null;
+
+	$: modelListForChat = modelPickerModels === null ? $models : modelPickerModels;
+
+	/** Resolve model for chat flows; picker may list Agent Layer models not present in global $models. */
+	const resolveModel = (modelId: string): Model | undefined =>
+		$models.find((m) => m.id === modelId) ?? modelListForChat.find((m) => m.id === modelId);
 
 	let loading = false;
 
@@ -132,6 +145,7 @@
 	};
 
 	let taskIds = null;
+	let agentLayerAbortController: AbortController | null = null;
 
 	// Chat Input
 	let prompt = '';
@@ -204,7 +218,7 @@
 			return;
 		}
 
-		const model = atSelectedModel ?? $models.find((m) => m.id === selectedModels[0]);
+		const model = atSelectedModel ?? modelListForChat.find((m) => m.id === selectedModels[0]);
 		if (model) {
 			selectedToolIds = (model?.info?.meta?.toolIds ?? []).filter((id) =>
 				$tools.find((t) => t.id === id)
@@ -656,7 +670,7 @@
 			const urlModels = $page.url.searchParams.get('model')?.split(',');
 
 			if (urlModels.length === 1) {
-				const m = $models.find((m) => m.id === urlModels[0]);
+				const m = modelListForChat.find((m) => m.id === urlModels[0]);
 				if (!m) {
 					const modelSelectorButton = document.getElementById('model-selector-0-button');
 					if (modelSelectorButton) {
@@ -690,10 +704,12 @@
 			}
 		}
 
-		selectedModels = selectedModels.filter((modelId) => $models.map((m) => m.id).includes(modelId));
+		selectedModels = selectedModels.filter((modelId) =>
+			modelListForChat.map((m) => m.id).includes(modelId)
+		);
 		if (selectedModels.length === 0 || (selectedModels.length === 1 && selectedModels[0] === '')) {
-			if ($models.length > 0) {
-				selectedModels = [$models[0].id];
+			if (modelListForChat.length > 0) {
+				selectedModels = [modelListForChat[0].id];
 			} else {
 				selectedModels = [''];
 			}
@@ -763,7 +779,7 @@
 		}
 
 		selectedModels = selectedModels.map((modelId) =>
-			$models.map((m) => m.id).includes(modelId) ? modelId : ''
+			modelListForChat.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
 
 		const userSettings = await getUserSettings(localStorage.token);
@@ -863,7 +879,7 @@
 				...(m.usage ? { usage: m.usage } : {}),
 				...(m.sources ? { sources: m.sources } : {})
 			})),
-			model_item: $models.find((m) => m.id === modelId),
+			model_item: resolveModel(modelId),
 			chat_id: chatId,
 			session_id: $socket?.id,
 			id: responseMessageId
@@ -924,7 +940,7 @@
 				...(m.sources ? { sources: m.sources } : {})
 			})),
 			...(event ? { event: event } : {}),
-			model_item: $models.find((m) => m.id === modelId),
+			model_item: resolveModel(modelId),
 			chat_id: chatId,
 			session_id: $socket?.id,
 			id: responseMessageId
@@ -979,7 +995,11 @@
 			toast.error($i18n.t('Model not selected'));
 		} else {
 			const modelId = selectedModels[0];
-			const model = $models.filter((m) => m.id === modelId).at(0);
+			const model = resolveModel(modelId);
+			if (!model) {
+				toast.error($i18n.t('Model not found'));
+				return;
+			}
 
 			const messages = createMessagesList(history, history.currentId);
 			const parentMessage = messages.length !== 0 ? messages.at(-1) : null;
@@ -1034,7 +1054,11 @@
 	};
 
 	const addMessages = async ({ modelId, parentId, messages }) => {
-		const model = $models.filter((m) => m.id === modelId).at(0);
+		const model = resolveModel(modelId);
+		if (!model) {
+			toast.error($i18n.t('Model not found'));
+			return;
+		}
 
 		let parentMessage = history.messages[parentId];
 		let currentParentId = parentMessage ? parentMessage.id : null;
@@ -1249,7 +1273,7 @@
 
 		const messages = createMessagesList(history, history.currentId);
 		const _selectedModels = selectedModels.map((modelId) =>
-			$models.map((m) => m.id).includes(modelId) ? modelId : ''
+			modelListForChat.map((m) => m.id).includes(modelId) ? modelId : ''
 		);
 		if (JSON.stringify(selectedModels) !== JSON.stringify(_selectedModels)) {
 			selectedModels = _selectedModels;
@@ -1371,7 +1395,7 @@
 
 		// Create response messages for each selected model
 		for (const [_modelIdx, modelId] of selectedModelIds.entries()) {
-			const model = $models.filter((m) => m.id === modelId).at(0);
+			const model = resolveModel(modelId);
 
 			if (model) {
 				let responseMessageId = uuidv4();
@@ -1420,7 +1444,7 @@
 		await Promise.all(
 			selectedModelIds.map(async (modelId, _modelIdx) => {
 				console.log('modelId', modelId);
-				const model = $models.filter((m) => m.id === modelId).at(0);
+				const model = resolveModel(modelId);
 
 				if (model) {
 					const messages = createMessagesList(_history, parentId);
@@ -1567,6 +1591,201 @@
 			}))
 			.filter((message) => message?.role === 'user' || message?.content?.trim());
 
+		const agentExtraHeaders = (() => {
+			if (!$page.url.pathname.startsWith('/agent/chat')) return {};
+
+			const cats = ($page.url.searchParams.get('agent_categories') ?? '')
+				.split(',')
+				.map((s) => s.trim())
+				.filter((s) => s)
+				.join(',');
+			const domain = ($page.url.searchParams.get('agent_domain') ?? '').trim();
+
+			return {
+				...(cats ? { 'X-Agent-Router-Categories': cats } : {}),
+				...(domain ? { 'X-Agent-Tool-Domain': domain } : {})
+			};
+		})();
+
+		const agentUp = getAgentLayerUpstream($settings);
+		const agentLayerBase = agentUp?.baseUrl;
+		const useAgentLayerUpstream = $page.url.pathname.startsWith('/agent/chat') && !!agentLayerBase;
+
+		if (useAgentLayerUpstream) {
+			const mergedParams = { ...($settings?.params ?? {}), ...params };
+			const openAiBody: Record<string, unknown> = {
+				model: model.id,
+				messages,
+				stream
+			};
+			const tp = mergedParams?.temperature;
+			if (tp !== undefined && tp !== '' && tp !== null) {
+				const n = Number(tp);
+				if (!Number.isNaN(n)) openAiBody.temperature = n;
+			}
+			const tpp = mergedParams?.top_p;
+			if (tpp !== undefined && tpp !== '' && tpp !== null) {
+				const n = Number(tpp);
+				if (!Number.isNaN(n)) openAiBody.top_p = n;
+			}
+			const mt = mergedParams?.max_tokens;
+			if (mt !== undefined && mt !== '' && mt !== null) {
+				const n = Number(mt);
+				if (!Number.isNaN(n)) openAiBody.max_tokens = n;
+			}
+			if (
+				stream &&
+				(model.info?.meta?.capabilities?.usage ?? false)
+			) {
+				openAiBody.stream_options = { include_usage: true };
+			}
+
+			const identityHeaders: Record<string, string> = {};
+			if ($user?.id) {
+				identityHeaders['X-OpenWebUI-User-Id'] = String($user.id);
+			}
+
+			if (agentLayerAbortController) {
+				agentLayerAbortController.abort();
+				agentLayerAbortController = null;
+			}
+
+			const agentToken = String(agentUp?.token ?? '');
+			const [fetchRes, controller] = await fetchAgentLayerChatCompletion(
+				openAiBody,
+				agentLayerBase,
+				agentToken,
+				{ ...agentExtraHeaders, ...identityHeaders }
+			);
+			agentLayerAbortController = controller;
+
+			const finalizeDirectAgentError = async (err: unknown) => {
+				await handleOpenAIError(err, responseMessage);
+				agentLayerAbortController = null;
+				await tick();
+				scrollToBottom();
+			};
+
+			const finalizeDirectAgentSuccess = async () => {
+				responseMessage.done = true;
+				agentLayerAbortController = null;
+				history.messages[responseMessageId] = responseMessage;
+
+				if ($settings.responseAutoCopy) {
+					copyToClipboard(responseMessage.content);
+				}
+				if ($settings.responseAutoPlayback && !$showCallOverlay) {
+					await tick();
+					document.getElementById(`speak-button-${responseMessageId}`)?.click();
+				}
+
+				eventTarget.dispatchEvent(
+					new CustomEvent('chat:finish', {
+						detail: {
+							id: responseMessageId,
+							content: responseMessage.content
+						}
+					})
+				);
+
+				await chatCompletedHandler(
+					$chatId,
+					model.id,
+					responseMessageId,
+					createMessagesList(history, responseMessageId)
+				);
+				await tick();
+				scrollToBottom();
+			};
+
+			if (!fetchRes) {
+				await finalizeDirectAgentError({ detail: 'Network error (Agent Layer unreachable)' });
+				return;
+			}
+
+			if (!fetchRes.ok) {
+				let errBody: unknown = null;
+				try {
+					errBody = await fetchRes.json();
+				} catch {
+					errBody = { detail: await fetchRes.text() };
+				}
+				await finalizeDirectAgentError(errBody);
+				return;
+			}
+
+			if (stream && fetchRes.body) {
+				let streamErrored = false;
+				try {
+					const textStream = await createOpenAITextStream(
+						fetchRes.body,
+						$settings.splitLargeChunks
+					);
+					for await (const update of textStream) {
+						const { value, done, sources, error, usage } = update;
+						if (error) {
+							await handleOpenAIError(error, responseMessage);
+							streamErrored = true;
+							break;
+						}
+						if (done) break;
+						if (sources) responseMessage.sources = sources;
+						if (usage) responseMessage.usage = usage;
+						if (responseMessage.content === '' && value === '\n') continue;
+						responseMessage.content += value;
+						history.messages[responseMessageId] = responseMessage;
+						if (autoScroll) scrollToBottom();
+					}
+				} catch (e: any) {
+					if (e?.name !== 'AbortError') {
+						toast.error(`${e?.message ?? e}`);
+						streamErrored = true;
+					}
+				}
+				if (!streamErrored) {
+					await finalizeDirectAgentSuccess();
+				} else {
+					agentLayerAbortController = null;
+				}
+				return;
+			}
+
+			try {
+				const data = await fetchRes.json();
+				if (data.error) {
+					await finalizeDirectAgentError(data);
+					return;
+				}
+				const text = data.choices?.[0]?.message?.content ?? '';
+				if (typeof text === 'string') {
+					responseMessage.content = text;
+				}
+			} catch (e) {
+				await finalizeDirectAgentError({ detail: String(e) });
+				return;
+			}
+
+			await finalizeDirectAgentSuccess();
+			return;
+		}
+
+		// Agent chat must never use WebUI / Ollama routing — only Agent Layer API.
+		if ($page.url.pathname.startsWith('/agent/chat')) {
+			await handleOpenAIError(
+				{
+					detail: $i18n.t(
+						'Agent chat requires an enabled Agent Layer connection (Settings → Connections → Agent Layer API). Normal chat can still use Ollama; this view does not.'
+					)
+				},
+				responseMessage
+			);
+			history.messages[responseMessageId] = responseMessage;
+			history.currentId = responseMessageId;
+			await tick();
+			scrollToBottom();
+			return;
+		}
+
 		const res = await generateOpenAIChatCompletion(
 			localStorage.token,
 			{
@@ -1619,7 +1838,7 @@
 							: undefined
 					)
 				},
-				model_item: $models.find((m) => m.id === model.id),
+				model_item: resolveModel(model.id),
 
 				session_id: $socket?.id,
 				chat_id: $chatId,
@@ -1647,7 +1866,8 @@
 						}
 					: {})
 			},
-			`${WEBUI_BASE_URL}/api`
+			`${WEBUI_BASE_URL}/api`,
+			agentExtraHeaders
 		).catch(async (error) => {
 			toast.error(`${error}`);
 
@@ -1720,6 +1940,22 @@
 	};
 
 	const stopResponse = async () => {
+		if (agentLayerAbortController) {
+			agentLayerAbortController.abort();
+			agentLayerAbortController = null;
+
+			const responseMessage = history.messages[history.currentId];
+			for (const messageId of history.messages[responseMessage.parentId].childrenIds) {
+				history.messages[messageId].done = true;
+			}
+			history.messages[history.currentId] = responseMessage;
+
+			if (autoScroll) {
+				scrollToBottom();
+			}
+			return;
+		}
+
 		if (taskIds) {
 			for (const taskId of taskIds) {
 				const res = await stopTask(localStorage.token, taskId).catch((error) => {
@@ -1810,9 +2046,7 @@
 			responseMessage.done = false;
 			await tick();
 
-			const model = $models
-				.filter((m) => m.id === (responseMessage?.selectedModelId ?? responseMessage.model))
-				.at(0);
+			const model = resolveModel(responseMessage?.selectedModelId ?? responseMessage.model);
 
 			if (model) {
 				await sendPromptSocket(history, model, responseMessage.id, _chatId);
@@ -1983,6 +2217,7 @@
 					{history}
 					title={$chatTitle}
 					bind:selectedModels
+					modelSelectorModels={modelPickerModels}
 					shareEnabled={!!history.currentId}
 					{initNewChat}
 				/>
@@ -2125,7 +2360,7 @@
 				chatId={$chatId}
 				modelId={selectedModelIds?.at(0) ?? null}
 				models={selectedModelIds.reduce((a, e, i, arr) => {
-					const model = $models.find((m) => m.id === e);
+					const model = resolveModel(e);
 					if (model) {
 						return [...a, model];
 					}

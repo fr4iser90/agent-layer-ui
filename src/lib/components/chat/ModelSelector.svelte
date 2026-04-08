@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { models, showSettings, settings, user, mobile, config } from '$lib/stores';
+	import { models, showSettings, settings, user, mobile, config, type Model } from '$lib/stores';
 	import { onMount, tick, getContext } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import Selector from './ModelSelector/Selector.svelte';
@@ -13,6 +13,11 @@
 
 	export let showSetDefault = true;
 
+	/** When set (including empty array), restricts the dropdown to this list instead of all $models. */
+	export let modelsList: Model[] | null = null;
+
+	$: selectorModels = modelsList ?? $models;
+
 	const saveDefaultModel = async () => {
 		const hasEmptyModel = selectedModels.filter((it) => it === '');
 		if (hasEmptyModel.length) {
@@ -25,9 +30,9 @@
 		toast.success($i18n.t('Default model updated'));
 	};
 
-	$: if (selectedModels.length > 0 && $models.length > 0) {
+	$: if (selectedModels.length > 0 && selectorModels.length > 0) {
 		selectedModels = selectedModels.map((model) =>
-			$models.map((m) => m.id).includes(model) ? model : ''
+			selectorModels.map((m) => m.id).includes(model) ? model : ''
 		);
 	}
 </script>
@@ -40,7 +45,7 @@
 					<Selector
 						id={`${selectedModelIdx}`}
 						placeholder={$i18n.t('Select a model')}
-						items={$models.map((model) => ({
+						items={selectorModels.map((model) => ({
 							value: model.id,
 							label: model.name,
 							model: model

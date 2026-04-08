@@ -332,7 +332,8 @@ export const verifyOpenAIConnection = async (
 export const chatCompletion = async (
 	token: string = '',
 	body: object,
-	url: string = `${WEBUI_BASE_URL}/api`
+	url: string = `${WEBUI_BASE_URL}/api`,
+	extraHeaders: Record<string, string> = {}
 ): Promise<[Response | null, AbortController]> => {
 	const controller = new AbortController();
 	let error = null;
@@ -342,7 +343,8 @@ export const chatCompletion = async (
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${token}`,
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			...extraHeaders
 		},
 		body: JSON.stringify(body)
 	}).catch((err) => {
@@ -358,10 +360,47 @@ export const chatCompletion = async (
 	return [res, controller];
 };
 
+/** Base URL may be `https://host` or `https://host/v1`; chat targets `{base}/v1/chat/completions`. */
+export const normalizeAgentLayerV1Url = (baseUrl: string): string => {
+	const t = baseUrl.trim().replace(/\/$/, '');
+	return t.endsWith('/v1') ? t : `${t}/v1`;
+};
+
+/** Direct OpenAI-compatible chat completions to Agent Layer (browser → Agent Layer). */
+export const fetchAgentLayerChatCompletion = async (
+	body: object,
+	baseUrl: string,
+	token: string,
+	extraHeaders: Record<string, string> = {}
+): Promise<[Response | null, AbortController]> => {
+	const controller = new AbortController();
+	const v1 = normalizeAgentLayerV1Url(baseUrl);
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+		...extraHeaders
+	};
+	if (token) {
+		headers.Authorization = `Bearer ${token}`;
+	}
+
+	const res = await fetch(`${v1}/chat/completions`, {
+		signal: controller.signal,
+		method: 'POST',
+		headers,
+		body: JSON.stringify(body)
+	}).catch((err) => {
+		console.log(err);
+		return null;
+	});
+
+	return [res, controller];
+};
+
 export const generateOpenAIChatCompletion = async (
 	token: string = '',
 	body: object,
-	url: string = `${WEBUI_BASE_URL}/api`
+	url: string = `${WEBUI_BASE_URL}/api`,
+	extraHeaders: Record<string, string> = {}
 ) => {
 	let error = null;
 
@@ -369,7 +408,8 @@ export const generateOpenAIChatCompletion = async (
 		method: 'POST',
 		headers: {
 			Authorization: `Bearer ${token}`,
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			...extraHeaders
 		},
 		body: JSON.stringify(body)
 	})

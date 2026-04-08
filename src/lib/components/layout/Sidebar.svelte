@@ -20,7 +20,8 @@
 		channels,
 		socket,
 		config,
-		isApp
+		isApp,
+		models
 	} from '$lib/stores';
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
 
@@ -41,6 +42,7 @@
 	} from '$lib/apis/chats';
 	import { createNewFolder, getFolders, updateFolderParentIdById } from '$lib/apis/folders';
 	import { WEBUI_BASE_URL } from '$lib/constants';
+	import { getAgentLayerUpstream } from '$lib/utils/agentLayerConnection';
 
 	import ArchivedChatsModal from './Sidebar/ArchivedChatsModal.svelte';
 	import UserMenu from './Sidebar/UserMenu.svelte';
@@ -71,6 +73,11 @@
 	let showPinnedChat = true;
 
 	let showCreateChannel = false;
+
+	$: hasAgentLayerModels =
+		($models ?? []).filter((m) => (m as any)?.info?.meta?.capabilities?.['agent-layer']).length > 0;
+	$: showAgentNav =
+		hasAgentLayerModels || !!getAgentLayerUpstream($settings ?? {});
 
 	// Pagination variables
 	let chatListLoading = false;
@@ -604,6 +611,45 @@
 
 					<div class="flex self-center translate-y-[0.5px]">
 						<div class=" self-center font-medium text-sm font-primary">{$i18n.t('Workspace')}</div>
+					</div>
+				</a>
+			</div>
+		{/if}
+
+		{#if ['user', 'admin'].includes($user?.role) && showAgentNav}
+			<div class="px-1.5 flex justify-center text-gray-800 dark:text-gray-200">
+				<a
+					class="grow flex items-center space-x-3 rounded-lg px-2 py-[7px] hover:bg-gray-100 dark:hover:bg-gray-900 transition"
+					href="/agent/chat"
+					on:click={() => {
+						selectedChatId = null;
+						chatId.set('');
+
+						if ($mobile) {
+							showSidebar.set(false);
+						}
+					}}
+					draggable="false"
+				>
+					<div class="self-center">
+						<svg
+							xmlns="http://www.w3.org/2000/svg"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke-width="2"
+							stroke="currentColor"
+							class="size-[1.1rem]"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M12 18.75a6.75 6.75 0 1 0 0-13.5 6.75 6.75 0 0 0 0 13.5Zm0 0c1.755 0 3.372.67 4.589 1.768M12 18.75c-1.755 0-3.372.67-4.589 1.768"
+							/>
+						</svg>
+					</div>
+
+					<div class="flex self-center translate-y-[0.5px]">
+						<div class=" self-center font-medium text-sm font-primary">{$i18n.t('Agent')}</div>
 					</div>
 				</a>
 			</div>

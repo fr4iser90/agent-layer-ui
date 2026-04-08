@@ -10,6 +10,7 @@
 	import { getDirectConnectionsConfig, setDirectConnectionsConfig } from '$lib/apis/configs';
 
 	import { config, models, settings, user } from '$lib/stores';
+	import { updateUserSettings } from '$lib/apis/users';
 
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
@@ -19,6 +20,7 @@
 	import OpenAIConnection from './Connections/OpenAIConnection.svelte';
 	import AddConnectionModal from '$lib/components/AddConnectionModal.svelte';
 	import OllamaConnection from './Connections/OllamaConnection.svelte';
+	import AgentLayerConnection from './Connections/AgentLayerConnection.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -43,9 +45,14 @@
 
 	let directConnectionsConfig = null;
 
+	let ENABLE_AGENT_LAYER = false;
+	let AGENT_LAYER_URLS: string[] = [];
+	let AGENT_LAYER_CONFIGS: Record<number, { enable?: boolean; key?: string }> = {};
+
 	let pipelineUrls = {};
 	let showAddOpenAIConnectionModal = false;
 	let showAddOllamaConnectionModal = false;
+	let showAddAgentLayerConnectionModal = false;
 
 	const updateOpenAIHandler = async () => {
 		if (ENABLE_OPENAI_API !== null) {
@@ -135,6 +142,41 @@
 		await updateOllamaHandler();
 	};
 
+	const updateAgentLayerHandler = async () => {
+		const prev = $settings?.agentLayer ?? {};
+		const connections = ENABLE_AGENT_LAYER
+			? AGENT_LAYER_URLS.map((url, idx) => ({
+					url: (url ?? '').trim().replace(/\/$/, ''),
+					token: AGENT_LAYER_CONFIGS[idx]?.key ?? '',
+					enable: AGENT_LAYER_CONFIGS[idx]?.enable !== false
+				})).filter((c) => c.url)
+			: [];
+
+		const next = {
+			...prev,
+			enabled: ENABLE_AGENT_LAYER,
+			connections,
+			baseUrl: undefined,
+			token: undefined
+		};
+
+		await settings.set({ ...$settings, agentLayer: next });
+		await updateUserSettings(localStorage.token, { ui: { ...$settings, agentLayer: next } });
+
+		toast.success($i18n.t('Agent Layer API settings updated'));
+		await models.set(await getModels());
+	};
+
+	const addAgentLayerConnectionHandler = async (connection) => {
+		AGENT_LAYER_URLS = [...AGENT_LAYER_URLS, connection.url];
+		AGENT_LAYER_CONFIGS[AGENT_LAYER_URLS.length - 1] = {
+			enable: connection.config?.enable !== false,
+			key: connection.key
+		};
+
+		await updateAgentLayerHandler();
+	};
+
 	onMount(async () => {
 		if ($user?.role === 'admin') {
 			let ollamaConfig = {};
@@ -190,6 +232,40 @@
 					}
 				}
 			}
+
+			const al = $settings?.agentLayer ?? {};
+			if (al.enabled === false) {
+				ENABLE_AGENT_LAYER = false;
+			} else if (al.enabled === true) {
+				ENABLE_AGENT_LAYER = true;
+			} else {
+				ENABLE_AGENT_LAYER = !!(
+					(al.baseUrl ?? '').trim() || al.connections?.some((c: { url?: string }) => c?.url?.trim())
+				);
+			}
+
+			if (al.connections?.length) {
+				AGENT_LAYER_URLS = al.connections.map((c: { url: string }) => c.url);
+				al.connections.forEach(
+					(c: { token?: string; enable?: boolean }, idx: number) => {
+						AGENT_LAYER_CONFIGS[idx] = {
+							enable: c.enable !== false,
+							key: c.token ?? ''
+						};
+					}
+				);
+			} else if ((al.baseUrl ?? '').trim()) {
+				AGENT_LAYER_URLS = [al.baseUrl];
+				AGENT_LAYER_CONFIGS[0] = { enable: true, key: al.token ?? '' };
+			} else {
+				AGENT_LAYER_URLS = [];
+			}
+
+			for (let i = 0; i < AGENT_LAYER_URLS.length; i++) {
+				if (!AGENT_LAYER_CONFIGS[i]) {
+					AGENT_LAYER_CONFIGS[i] = { enable: true, key: '' };
+				}
+			}
 		}
 	});
 
@@ -197,6 +273,7 @@
 		updateOpenAIHandler();
 		updateOllamaHandler();
 		updateDirectConnectionsHandler();
+		await updateAgentLayerHandler();
 
 		dispatch('save');
 	};
@@ -211,6 +288,12 @@
 	ollama
 	bind:show={showAddOllamaConnectionModal}
 	onSubmit={addOllamaConnectionHandler}
+/>
+
+<AddConnectionModal
+	agentLayer
+	bind:show={showAddAgentLayerConnectionModal}
+	onSubmit={addAgentLayerConnectionHandler}
 />
 
 <form class="flex flex-col h-full justify-between text-sm" on:submit|preventDefault={submitHandler}>
@@ -383,6 +466,74 @@
 						)}
 					</div>
 				</div>
+			</div>
+
+			<hr class=" border-gray-100 dark:border-gray-850" />
+
+			<div class="pr-1.5 my-2">
+				<div class="flex justify-between items-center text-sm mb-2">
+					<div class="font-medium">{$i18n.t('Agent Layer API')}</div>
+
+					<div class="mt-1">
+						<Switch
+							bind:state={ENABLE_AGENT_LAYER}
+							on:change={async () => {
+								await updateAgentLayerHandler();
+							}}
+						/>
+					</div>
+				</div>
+
+				{#if ENABLE_AGENT_LAYER}
+					<hr class=" border-gray-100 dark:border-gray-850 my-2" />
+
+					<div class="">
+						<div class="flex justify-between items-center">
+							<div class="font-medium">{$i18n.t('Manage Agent Layer Connections')}</div>
+
+							<Tooltip content={$i18n.t(`Add Connection`)}>
+								<button
+									class="px-1"
+									on:click={() => {
+										showAddAgentLayerConnectionModal = true;
+									}}
+									type="button"
+								>
+									<Plus />
+								</button>
+							</Tooltip>
+						</div>
+
+						<div class="flex w-full gap-1.5">
+							<div class="flex-1 flex flex-col gap-1.5 mt-1.5">
+								{#each AGENT_LAYER_URLS as url, idx}
+									<AgentLayerConnection
+										bind:url
+										bind:config={AGENT_LAYER_CONFIGS[idx]}
+										onSubmit={() => {
+											updateAgentLayerHandler();
+										}}
+										onDelete={() => {
+											AGENT_LAYER_URLS = AGENT_LAYER_URLS.filter((u, urlIdx) => idx !== urlIdx);
+
+											const newConfig = {};
+											AGENT_LAYER_URLS.forEach((u, newIdx) => {
+												newConfig[newIdx] =
+													AGENT_LAYER_CONFIGS[newIdx < idx ? newIdx : newIdx + 1];
+											});
+											AGENT_LAYER_CONFIGS = newConfig;
+											updateAgentLayerHandler();
+										}}
+									/>
+								{/each}
+							</div>
+						</div>
+
+						<div class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+							{$i18n.t('Used by the dedicated /agent/* views. Normal chat remains unchanged.')}
+						</div>
+					</div>
+				{/if}
 			</div>
 		{:else}
 			<div class="flex h-full justify-center">

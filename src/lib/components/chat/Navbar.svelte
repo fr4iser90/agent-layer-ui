@@ -13,7 +13,8 @@
 		showControls,
 		showSidebar,
 		temporaryChatEnabled,
-		user
+		user,
+		type Model
 	} from '$lib/stores';
 
 	import { slide } from 'svelte/transition';
@@ -40,6 +41,9 @@
 	export let history;
 	export let selectedModels;
 	export let showModelSelector = true;
+
+	/** Passed to ModelSelector: restrict dropdown to these models (e.g. agent-layer only). */
+	export let modelSelectorModels: Model[] | null = null;
 
 	let showShareChatModal = false;
 	let showDownloadChatModal = false;
@@ -80,7 +84,7 @@
 			"
 				>
 					{#if showModelSelector}
-						<ModelSelector bind:selectedModels showSetDefault={!shareEnabled} />
+						<ModelSelector bind:selectedModels modelsList={modelSelectorModels} showSetDefault={!shareEnabled} />
 					{/if}
 				</div>
 
