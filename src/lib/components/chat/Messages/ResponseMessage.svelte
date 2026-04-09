@@ -44,6 +44,8 @@
 
 	import Error from './Error.svelte';
 	import Citations from './Citations.svelte';
+	import AgentLayerMetaBox from './AgentLayerMetaBox.svelte';
+	import AgentLayerTimeline from './AgentLayerTimeline.svelte';
 	import CodeExecutions from './CodeExecutions.svelte';
 	import ContentRenderer from './ContentRenderer.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
@@ -98,6 +100,8 @@
 			usage?: unknown;
 		};
 		annotation?: { type: string; rating: number };
+		agentLayerMeta?: import('$lib/utils/agentLayerMeta').AgentLayerCompletionMeta;
+		agentLayerTimeline?: import('$lib/utils/agentLayerTimeline').AgentLayerTimelineEntry[];
 	}
 
 	export let chatId = '';
@@ -777,8 +781,20 @@
 							</div>
 						{:else}
 							<div class="w-full flex flex-col relative" id="response-content-container">
+								{#if message?.agentLayerTimeline?.length}
+									<AgentLayerTimeline entries={message.agentLayerTimeline} />
+								{/if}
+
 								{#if message.content === '' && !message.error}
-									<Skeleton />
+									{#if !message?.agentLayerTimeline?.length}
+										<Skeleton />
+									{:else}
+										<div
+											class="text-sm text-gray-500 dark:text-gray-400 py-2 border-t border-gray-100 dark:border-gray-800 mt-1"
+										>
+											{$i18n.t('Waiting for assistant reply…')}
+										</div>
+									{/if}
 								{:else if message.content && message.error !== true}
 									<!-- always show message contents even if there's an error -->
 									<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
@@ -854,6 +870,10 @@
 
 								{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
 									<Citations id={message?.id} sources={message?.sources ?? message?.citations} />
+								{/if}
+
+								{#if message?.agentLayerMeta}
+									<AgentLayerMetaBox meta={message.agentLayerMeta} />
 								{/if}
 
 								{#if message.code_executions}

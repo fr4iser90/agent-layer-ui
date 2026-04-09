@@ -66,6 +66,12 @@
 	} from '$lib/apis/chats';
 	import { fetchAgentLayerChatCompletion, generateOpenAIChatCompletion } from '$lib/apis/openai';
 	import { getAgentLayerUpstream } from '$lib/utils/agentLayerConnection';
+	import { agentLayerMetaFromChatCompletionData, mergeAgentLayerCompletionMeta } from '$lib/utils/agentLayerMeta';
+	import {
+		runAgentLayerWsChatTurn,
+		sendAgentLayerWsContinueStep
+	} from '$lib/utils/agentLayerWebSocket';
+	import { shouldRecordAgentLayerTimelineFrame } from '$lib/utils/agentLayerTimeline';
 	import { processWeb, processWebSearch, processYoutubeVideo } from '$lib/apis/retrieval';
 	import { createOpenAITextStream } from '$lib/apis/streaming';
 	import { queryMemory } from '$lib/apis/memories';
@@ -146,6 +152,8 @@
 
 	let taskIds = null;
 	let agentLayerAbortController: AbortController | null = null;
+	let agentLayerWebSocket: WebSocket | null = null;
+	let agentLayerStepWaitPending = false;
 
 	// Chat Input
 	let prompt = '';
@@ -1640,24 +1648,20 @@
 				openAiBody.stream_options = { include_usage: true };
 			}
 
+			if ($page.url.pathname.startsWith('/agent/chat')) {
+				const stepFromUrl = $page.url.searchParams.get('agent_step_mode') === '1';
+				const stepFromSettings = $settings?.agentLayer?.defaults?.pauseBetweenRounds === true;
+				if (stepFromUrl || stepFromSettings) {
+					openAiBody.agent_pause_between_rounds = true;
+				}
+			}
+
 			const identityHeaders: Record<string, string> = {};
 			if ($user?.id) {
 				identityHeaders['X-OpenWebUI-User-Id'] = String($user.id);
 			}
 
-			if (agentLayerAbortController) {
-				agentLayerAbortController.abort();
-				agentLayerAbortController = null;
-			}
-
 			const agentToken = String(agentUp?.token ?? '');
-			const [fetchRes, controller] = await fetchAgentLayerChatCompletion(
-				openAiBody,
-				agentLayerBase,
-				agentToken,
-				{ ...agentExtraHeaders, ...identityHeaders }
-			);
-			agentLayerAbortController = controller;
 
 			const finalizeDirectAgentError = async (err: unknown) => {
 				await handleOpenAIError(err, responseMessage);
@@ -1698,6 +1702,109 @@
 				scrollToBottom();
 			};
 
+			/** Streaming agent turns use WebSocket §4.3 (cancel, add_tools, agent.* frames). */
+			if (stream) {
+				if (agentLayerAbortController) {
+					agentLayerAbortController.abort();
+					agentLayerAbortController = null;
+				}
+
+				const wsController = new AbortController();
+				agentLayerAbortController = wsController;
+
+				const routerCategoriesHeader = agentExtraHeaders['X-Agent-Router-Categories'];
+				const toolDomainHeader = agentExtraHeaders['X-Agent-Tool-Domain'];
+
+				try {
+					const { data } = await runAgentLayerWsChatTurn({
+						baseUrl: agentLayerBase,
+						token: agentToken,
+						body: openAiBody,
+						routerCategoriesHeader,
+						toolDomainHeader,
+						signal: wsController.signal,
+						onOpen: (ws) => {
+							agentLayerWebSocket = ws;
+						},
+						onStepWait: () => {
+							agentLayerStepWaitPending = true;
+						},
+						onFrame: (msg) => {
+							const t = String(msg.type ?? msg.event ?? msg.kind ?? '');
+							if (shouldRecordAgentLayerTimelineFrame(t)) {
+								responseMessage.agentLayerTimeline = [
+									...(responseMessage.agentLayerTimeline ?? []),
+									{
+										type: t,
+										at: Date.now(),
+										payload: { ...msg } as Record<string, unknown>
+									}
+								];
+								history.messages[responseMessageId] = responseMessage;
+							}
+						}
+					});
+
+					/* chat.completion may use { error: true, detail } (e.g. cancel) — not OpenAI { error: { message } } */
+					if (data?.error === true || data?.error === 'true') {
+						await handleOpenAIError(
+							{
+								detail:
+									typeof data.detail === 'string'
+										? data.detail
+										: String(data.detail ?? 'error')
+							},
+							responseMessage
+						);
+						return;
+					}
+
+					if (data?.error) {
+						await finalizeDirectAgentError(data);
+						return;
+					}
+
+					const meta = agentLayerMetaFromChatCompletionData(data);
+					if (meta) {
+						responseMessage.agentLayerMeta = meta;
+						history.messages[responseMessageId] = responseMessage;
+					}
+
+					const text = data?.choices?.[0]?.message?.content;
+					if (typeof text === 'string' && text.length > 0) {
+						responseMessage.content = text;
+						history.messages[responseMessageId] = responseMessage;
+					}
+
+					await finalizeDirectAgentSuccess();
+				} catch (e: any) {
+					if (!wsController.signal.aborted) {
+						toast.error(`${e?.message ?? e}`);
+						await finalizeDirectAgentError(
+							e && typeof e === 'object' && 'detail' in e ? e : { detail: String(e?.message ?? e) }
+						);
+					}
+				} finally {
+					agentLayerAbortController = null;
+					agentLayerWebSocket = null;
+					agentLayerStepWaitPending = false;
+				}
+				return;
+			}
+
+			if (agentLayerAbortController) {
+				agentLayerAbortController.abort();
+				agentLayerAbortController = null;
+			}
+
+			const [fetchRes, controller] = await fetchAgentLayerChatCompletion(
+				openAiBody,
+				agentLayerBase,
+				agentToken,
+				{ ...agentExtraHeaders, ...identityHeaders }
+			);
+			agentLayerAbortController = controller;
+
 			if (!fetchRes) {
 				await finalizeDirectAgentError({ detail: 'Network error (Agent Layer unreachable)' });
 				return;
@@ -1714,47 +1821,15 @@
 				return;
 			}
 
-			if (stream && fetchRes.body) {
-				let streamErrored = false;
-				try {
-					const textStream = await createOpenAITextStream(
-						fetchRes.body,
-						$settings.splitLargeChunks
-					);
-					for await (const update of textStream) {
-						const { value, done, sources, error, usage } = update;
-						if (error) {
-							await handleOpenAIError(error, responseMessage);
-							streamErrored = true;
-							break;
-						}
-						if (done) break;
-						if (sources) responseMessage.sources = sources;
-						if (usage) responseMessage.usage = usage;
-						if (responseMessage.content === '' && value === '\n') continue;
-						responseMessage.content += value;
-						history.messages[responseMessageId] = responseMessage;
-						if (autoScroll) scrollToBottom();
-					}
-				} catch (e: any) {
-					if (e?.name !== 'AbortError') {
-						toast.error(`${e?.message ?? e}`);
-						streamErrored = true;
-					}
-				}
-				if (!streamErrored) {
-					await finalizeDirectAgentSuccess();
-				} else {
-					agentLayerAbortController = null;
-				}
-				return;
-			}
-
 			try {
 				const data = await fetchRes.json();
 				if (data.error) {
 					await finalizeDirectAgentError(data);
 					return;
+				}
+				const mergedMeta = mergeAgentLayerCompletionMeta(fetchRes, data.agent_layer);
+				if (mergedMeta) {
+					responseMessage.agentLayerMeta = mergedMeta;
 				}
 				const text = data.choices?.[0]?.message?.content ?? '';
 				if (typeof text === 'string') {
@@ -1939,8 +2014,14 @@
 		history.messages[responseMessage.id] = responseMessage;
 	};
 
+	const continueAgentLayerStep = () => {
+		sendAgentLayerWsContinueStep(agentLayerWebSocket);
+		agentLayerStepWaitPending = false;
+	};
+
 	const stopResponse = async () => {
 		if (agentLayerAbortController) {
+			agentLayerStepWaitPending = false;
 			agentLayerAbortController.abort();
 			agentLayerAbortController = null;
 
@@ -2256,6 +2337,22 @@
 						</div>
 
 						<div class=" pb-[1rem]">
+							{#if $page.url.pathname.startsWith('/agent/chat') && agentLayerStepWaitPending}
+								<div
+									class="mb-2 mx-1 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/90 dark:bg-amber-950/40 px-3 py-2 text-sm"
+								>
+									<span class="text-amber-900 dark:text-amber-100/90">
+										{$i18n.t('Agent paused between tool rounds — continue when ready.')}
+									</span>
+									<button
+										type="button"
+										class="shrink-0 px-3 py-1.5 rounded-lg bg-amber-800 text-white dark:bg-amber-600 hover:opacity-95 font-medium text-xs"
+										on:click={continueAgentLayerStep}
+									>
+										{$i18n.t('Continue')}
+									</button>
+								</div>
+							{/if}
 							<MessageInput
 								{history}
 								{taskIds}

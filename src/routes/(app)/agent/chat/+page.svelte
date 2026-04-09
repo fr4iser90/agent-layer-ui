@@ -1,7 +1,9 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { getContext, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 
 	import Chat from '$lib/components/chat/Chat.svelte';
 	import Help from '$lib/components/layout/Help.svelte';
@@ -11,7 +13,22 @@
 	import { getAgentLayerUpstream } from '$lib/utils/agentLayerConnection';
 	import { fetchAgentLayerModelsForPicker } from '$lib/utils/agentLayerModels';
 
+	const i18n = getContext<Writable<i18nType>>('i18n');
+
 	let remoteAgentPickerModels: Model[] = [];
+
+	$: stepModeOn = $page.url.searchParams.get('agent_step_mode') === '1';
+
+	const syncStepModeToUrl = async (on: boolean) => {
+		const url = get(page).url;
+		const searchParams = new URLSearchParams(url.searchParams);
+		if (on) {
+			searchParams.set('agent_step_mode', '1');
+		} else {
+			searchParams.delete('agent_step_mode');
+		}
+		await goto(`/agent/chat?${searchParams.toString()}`, { replaceState: true, noScroll: true });
+	};
 
 	$: workspaceAgentModels = $models.filter(
 		(m) => (m as any)?.info?.meta?.capabilities?.['agent-layer']
@@ -194,14 +211,25 @@
 			</button>
 		</div>
 
-		<button
-			class="text-xs px-3 py-1.5 rounded-full bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium"
-			type="button"
-			on:click={useAgentModelsNow}
-			disabled={getAgentModelIds().length === 0}
-		>
-			Use agent models
-		</button>
+		<div class="flex flex-wrap items-center gap-3">
+			<label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+				<input
+					type="checkbox"
+					class="rounded border-gray-300 dark:border-gray-600"
+					checked={stepModeOn}
+					on:change={(e) => syncStepModeToUrl(e.currentTarget.checked)}
+				/>
+				<span>{$i18n.t('Pause between tool rounds (WebSocket)')}</span>
+			</label>
+			<button
+				class="text-xs px-3 py-1.5 rounded-full bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium"
+				type="button"
+				on:click={useAgentModelsNow}
+				disabled={getAgentModelIds().length === 0}
+			>
+				Use agent models
+			</button>
+		</div>
 	</div>
 
 	{#if showAgentPanel}

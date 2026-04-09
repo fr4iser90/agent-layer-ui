@@ -237,14 +237,16 @@ UI-States:
 - **401** → Re-Login / Token erneuern
 - **Network/5xx** → Retry + Error banner
 
-### 10.4 Agent-Chat: Nachricht senden
+### 10.4 Agent-Chat: Transport & Timeline
 
-Beim Senden:
+Siehe **[WEBUI_CONTRACT.md §4.3](WEBUI_CONTRACT.md)** für den vollen Duplex-Chat über **`WebSocket /ws/v1/chat`**.
 
-- `POST {AGENT_BASE}/v1/chat/completions`
-- Optional (wenn Nutzer toggled):
-  - Header `X-Agent-Router-Categories: cat1,cat2`
-  - oder `X-Agent-Tool-Domain: domain`
+**Praxis im Fork:**
+
+- **Streaming** (`/agent/chat`): WebSocket nutzen; Server-Frames (`agent.session`, `agent.llm_round_*`, `agent.tool_*`, `agent.step_wait`, `agent.done`, …) als **Timeline** / Schrittliste rendern, nicht nur die finale Assistentenblase.
+- **Non-Stream:** weiter `POST {AGENT_BASE}/v1/chat/completions`.
+- Optional: **`agent_pause_between_rounds`** im `chat`-Body (nur WS) + UI-**Weiter** → `continue_step` nach `agent.step_wait`.
+- Router: Header `X-Agent-Router-Categories` / `X-Agent-Tool-Domain` wie bisher (oder analog im WS-`chat`-Frame als `router_categories_header` / `tool_domain_header`).
 
 ### 10.5 Secrets UI (Agent Settings)
 

@@ -12,6 +12,8 @@ export type AgentLayerUiSettings = {
 	defaults?: {
 		categories?: string[];
 		domain?: string;
+		/** WebSocket only: pause after tool rounds until user sends continue_step (§4.3). */
+		pauseBetweenRounds?: boolean;
 	};
 };
 

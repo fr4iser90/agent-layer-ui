@@ -95,6 +95,48 @@ Chat, tools, RAG ingest, and user secrets resolve **user id** and **tenant id** 
 
 These are **optional**; omit for default router behavior.
 
+### 4.3 WebSocket chat (duplex, per-round events)
+
+`WebSocket /ws/v1/chat`  
+**Auth:** `?token=<JWT_or_API_key>` on the handshake URL **or** header `Authorization: Bearer <same>`. Same optional-connection-key rules as `POST /v1/chat/completions` when `optional_connection_key` is set in operator settings. If that key is **not** configured, the same routes (including this WebSocket) allow the handshake **without** a token, matching HTTP optional-route behavior.
+
+**User/tenant:** Same headers as §3 on the WebSocket handshake (`AGENT_USER_SUB_HEADER` list, `AGENT_TENANT_ID_HEADER`). Browsers often cannot set arbitrary handshake headers; use a same-origin reverse proxy that injects them, or backend support for query parameters if you must run cross-origin from a pure SPA.
+
+#### Recommended WebUI rendering (`/agent/*`)
+
+Treat the server frame stream as a **timeline** (sidebar, collapsible strip, or step list), not only the final assistant bubble:
+
+1. **`agent.session`** — routed category, router categories, `forwarded_tools`.
+2. **`agent.llm_round_start`** / **`agent.llm_round`** — round index, model `tool_calls`, short `content_excerpt`.
+3. **`agent.tool_start`** / **`agent.tool_done`** — tool name; `tool_done` may include `result_chars`.
+4. **`agent.step_wait`** — optional human-in-the-loop pause; show **Continue** sending `continue_step`.
+5. **`agent.done`** — round finished (final text or `max_tool_rounds` / other end states).
+6. **`chat.completion`** — final OpenAI-shaped completion for the transcript (same as HTTP).
+
+**Cancel** maps to a control that sends `cancel` (honoured before the next internal LLM round; does not abort a request already in flight at Ollama).
+
+#### Step-by-round mode (WebSocket-only)
+
+In the **`chat`** frame, inside `body`:
+
+- **`agent_pause_between_rounds`:** `true` (or `"true"` / `1`) — after the model returns **tool calls** and the server has **finished running those tools**, the server emits **`agent.step_wait`** and **blocks** until the client sends **`{"type":"continue_step"}`**. No pause after a round that ends with plain text or on the last possible round.
+
+While waiting, the client may send **`add_tools`** and **`cancel`**.
+
+**HTTP `POST /v1/chat/completions`** ignores `agent_pause_between_rounds` (no control queue); step mode is **WebSocket-only**.
+
+**Client → server** (JSON text frames):
+
+| `type` | Purpose |
+|--------|---------|
+| `ping` | Server replies `{"type":"pong"}`. |
+| `cancel` | Abort before the **next** internal LLM round (does not interrupt Ollama in flight). Also aborts while blocked on **`agent.step_wait`**. |
+| `add_tools` | `names: string[]` — extra tool function names for **subsequent** rounds (registry + denylist apply). |
+| `continue_step` | After **`agent.step_wait`**, resume when **`agent_pause_between_rounds`** was set on this turn’s `chat.body`. |
+| `chat` | Start a turn: `body` = same object as `POST /v1/chat/completions` (minus `stream`); optional `router_categories_header`, `tool_domain_header`. |
+
+**Server → client** (JSON): `agent.session`, `agent.llm_round_start`, `agent.llm_round`, `agent.tool_start`, `agent.tool_done`, optional **`agent.step_wait`**, `agent.done`, `agent.cancelled` / `agent.aborted`, then `{"type":"chat.completion","data":{...}}` (or `error`). Multiple `chat` turns may be sent on one connection.
+
 ---
 
 ## 5. Models
@@ -225,3 +267,4 @@ When you add backend endpoints, extend this file and optionally publish **OpenAP
 | Date | Note |
 |------|------|
 | 2026-04-07 | Initial contract document; `/auth/refresh` documented as public for refresh-token flow. |
+| 2026-04-08 | §4.3 WebSocket: timeline guidance, `agent_pause_between_rounds`, `continue_step`, `agent.step_wait`; optional auth without connection key. |
