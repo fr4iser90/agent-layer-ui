@@ -17,6 +17,7 @@
 		getPinnedChatList,
 		updateChatById
 	} from '$lib/apis/chats';
+	import { AGENT_LAYER_CHAT_CHANNEL_KEY } from '$lib/utils/agentLayerChat';
 	import {
 		chatId,
 		chatTitle as _chatTitle,
@@ -48,6 +49,9 @@
 	export let shiftKey = false;
 
 	let chat = null;
+
+	$: chatHref =
+		chat?.chat?.[AGENT_LAYER_CHAT_CHANNEL_KEY] === true ? `/agent/chat/${id}` : `/c/${id}`;
 
 	let mouseOver = false;
 	let draggable = false;
@@ -101,7 +105,11 @@
 		});
 
 		if (res) {
-			goto(`/c/${res.id}`);
+			const dest =
+				res.chat?.[AGENT_LAYER_CHAT_CHANNEL_KEY] === true
+					? `/agent/chat/${res.id}`
+					: `/c/${res.id}`;
+			goto(dest);
 
 			currentChatPage.set(1);
 			await chats.set(await getChatList(localStorage.token, $currentChatPage));
@@ -272,7 +280,7 @@
 				: selected
 					? 'bg-gray-100 dark:bg-gray-950'
 					: ' group-hover:bg-gray-100 dark:group-hover:bg-gray-950'}  whitespace-nowrap text-ellipsis"
-			href="/c/{id}"
+			href={chatHref}
 			on:click={() => {
 				dispatch('select');
 

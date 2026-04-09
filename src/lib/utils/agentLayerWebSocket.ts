@@ -3,20 +3,16 @@
  * Browser: auth via ?token= (custom handshake headers are not reliably available in browsers).
  */
 
+import { resolveAgentLayerOrigin } from '$lib/utils/agentLayerConnection';
+
 export type AgentLayerWsChatResult = {
 	data: Record<string, unknown>;
 	aborted?: boolean;
 };
 
-function httpOriginFromAgentBase(baseUrl: string): string {
-	let root = baseUrl.trim().replace(/\/$/, '');
-	if (root.endsWith('/v1')) root = root.slice(0, -3);
-	return root;
-}
-
 /** Build wss://host/ws/v1/chat?token=… from configured Agent Layer base URL. */
 export function buildAgentLayerWsUrl(baseUrl: string, token: string): string {
-	const root = httpOriginFromAgentBase(baseUrl);
+	const root = resolveAgentLayerOrigin(baseUrl);
 	const base = root.endsWith('/') ? root : `${root}/`;
 	const u = new URL('ws/v1/chat', base);
 	u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -79,6 +75,23 @@ export function extractOpenAiCompletionData(msg: Record<string, unknown>): Recor
 		return payload as Record<string, unknown>;
 	}
 	return null;
+}
+
+/** If normalized completion omits `model`, copy it from the raw WS frame (OpenAI puts it next to `choices`). */
+function mergeModelFromWsFrame(frame: Record<string, unknown>, data: Record<string, unknown>): void {
+	if (typeof data.model === 'string' && data.model.trim()) return;
+	const inner = frame.data;
+	if (inner && typeof inner === 'object') {
+		const m = (inner as Record<string, unknown>).model;
+		if (typeof m === 'string' && m.trim()) {
+			data.model = m.trim();
+			return;
+		}
+	}
+	const fm = frame.model;
+	if (typeof fm === 'string' && fm.trim()) {
+		data.model = fm.trim();
+	}
 }
 
 export type RunAgentLayerWsChatOptions = {
@@ -194,7 +207,9 @@ export function runAgentLayerWsChatTurn(
 			const t = messageType(msg);
 			if (!t && extractOpenAiCompletionData(msg)) {
 				opts.signal?.removeEventListener('abort', onAbort);
-				finish({ data: extractOpenAiCompletionData(msg)! });
+				const d = extractOpenAiCompletionData(msg)!;
+				mergeModelFromWsFrame(msg, d);
+				finish({ data: d });
 				return;
 			}
 
@@ -213,12 +228,15 @@ export function runAgentLayerWsChatTurn(
 				const normalized = extractOpenAiCompletionData(msg);
 				if (normalized) {
 					opts.signal?.removeEventListener('abort', onAbort);
+					mergeModelFromWsFrame(msg, normalized);
 					finish({ data: normalized });
 					return;
 				}
 				if (msg.data && typeof msg.data === 'object') {
 					opts.signal?.removeEventListener('abort', onAbort);
-					finish({ data: msg.data as Record<string, unknown> });
+					const d = msg.data as Record<string, unknown>;
+					mergeModelFromWsFrame(msg, d);
+					finish({ data: d });
 					return;
 				}
 			}

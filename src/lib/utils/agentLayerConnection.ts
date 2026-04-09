@@ -21,6 +21,16 @@ export type AgentLayerUiSettings = {
  * Resolves the primary Agent Layer upstream (first enabled connection with a URL).
  * Honors `enabled: false`. Supports legacy `{ baseUrl, token }`.
  */
+/**
+ * Normalizes configured base URL to an origin without trailing `/v1`,
+ * so callers can append `/v1/...` paths consistently (matches WS URL builder).
+ */
+export function resolveAgentLayerOrigin(baseUrl: string): string {
+	let root = baseUrl.trim().replace(/\/$/, '');
+	if (root.endsWith('/v1')) root = root.slice(0, -3).replace(/\/$/, '');
+	return root;
+}
+
 export function getAgentLayerUpstream(settings: {
 	agentLayer?: AgentLayerUiSettings | null;
 }): { baseUrl: string; token: string } | null {

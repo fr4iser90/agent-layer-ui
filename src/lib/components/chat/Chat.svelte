@@ -66,6 +66,11 @@
 	} from '$lib/apis/chats';
 	import { fetchAgentLayerChatCompletion, generateOpenAIChatCompletion } from '$lib/apis/openai';
 	import { getAgentLayerUpstream } from '$lib/utils/agentLayerConnection';
+	import {
+		AGENT_LAYER_CHAT_CHANNEL_KEY,
+		AGENT_LAYER_DELEGATED_MODEL_ID,
+		applyResolvedModelFromCompletionToMessage
+	} from '$lib/utils/agentLayerChat';
 	import { agentLayerMetaFromChatCompletionData, mergeAgentLayerCompletionMeta } from '$lib/utils/agentLayerMeta';
 	import {
 		runAgentLayerWsChatTurn,
@@ -137,6 +142,24 @@
 	let selectedModelIds = [];
 	$: selectedModelIds = atSelectedModel !== undefined ? [atSelectedModel.id] : selectedModels;
 
+	$: agentRouteActive = $page.url.pathname.startsWith('/agent/chat');
+
+	/** Agent chat: model is chosen by Agent Layer; keep a valid placeholder id for API body only. */
+	$: if (agentRouteActive) {
+		if (atSelectedModel !== undefined) {
+			atSelectedModel = undefined;
+		}
+		if (modelListForChat.length > 0) {
+			const cur = selectedModels[0];
+			const curValid = Boolean(cur && modelListForChat.some((m) => m.id === cur));
+			if (!curValid) {
+				selectedModels = [modelListForChat[0].id];
+			} else if (selectedModels.length > 1) {
+				selectedModels = [cur];
+			}
+		}
+	}
+
 	let selectedToolIds = [];
 	let imageGenerationEnabled = false;
 	let webSearchEnabled = false;
@@ -154,6 +177,9 @@
 	let agentLayerAbortController: AbortController | null = null;
 	let agentLayerWebSocket: WebSocket | null = null;
 	let agentLayerStepWaitPending = false;
+
+	/** Set from loaded chat JSON; enables Agent Layer when opening legacy `/c/{id}` until redirect. */
+	let persistedAgentLayerChannel = false;
 
 	// Chat Input
 	let prompt = '';
@@ -680,16 +706,20 @@
 			if (urlModels.length === 1) {
 				const m = modelListForChat.find((m) => m.id === urlModels[0]);
 				if (!m) {
-					const modelSelectorButton = document.getElementById('model-selector-0-button');
-					if (modelSelectorButton) {
-						modelSelectorButton.click();
-						await tick();
+					if (agentRouteActive && modelListForChat.length > 0) {
+						selectedModels = [modelListForChat[0].id];
+					} else {
+						const modelSelectorButton = document.getElementById('model-selector-0-button');
+						if (modelSelectorButton) {
+							modelSelectorButton.click();
+							await tick();
 
-						const modelSelectorInput = document.getElementById('model-search-input');
-						if (modelSelectorInput) {
-							modelSelectorInput.focus();
-							modelSelectorInput.value = urlModels[0];
-							modelSelectorInput.dispatchEvent(new Event('input'));
+							const modelSelectorInput = document.getElementById('model-search-input');
+							if (modelSelectorInput) {
+								modelSelectorInput.focus();
+								modelSelectorInput.value = urlModels[0];
+								modelSelectorInput.dispatchEvent(new Event('input'));
+							}
 						}
 					}
 				} else {
@@ -730,6 +760,8 @@
 
 		if ($page.url.pathname.includes('/c/')) {
 			window.history.replaceState(history.state, '', `/`);
+		} else if ($page.url.pathname.startsWith('/agent/chat')) {
+			window.history.replaceState(history.state, '', `/agent/chat`);
 		}
 
 		autoScroll = true;
@@ -803,6 +835,7 @@
 	};
 
 	const loadChat = async () => {
+		persistedAgentLayerChannel = false;
 		chatId.set(chatIdProp);
 		chat = await getChatById(localStorage.token, $chatId).catch(async (error) => {
 			await goto('/');
@@ -818,6 +851,18 @@
 
 			if (chatContent) {
 				console.log(chatContent);
+
+				const agentTagged = chatContent[AGENT_LAYER_CHAT_CHANNEL_KEY] === true;
+				const onAgentPath = get(page).url.pathname.startsWith('/agent/chat');
+				if (agentTagged && !onAgentPath) {
+					await goto(`/agent/chat/${chatIdProp}`, { replaceState: true });
+					return true;
+				}
+				if (!agentTagged && onAgentPath && chatIdProp) {
+					await goto(`/c/${chatIdProp}`, { replaceState: true });
+					return true;
+				}
+				persistedAgentLayerChannel = agentTagged;
 
 				selectedModels =
 					(chatContent?.models ?? undefined) !== undefined
@@ -1617,12 +1662,14 @@
 
 		const agentUp = getAgentLayerUpstream($settings);
 		const agentLayerBase = agentUp?.baseUrl;
-		const useAgentLayerUpstream = $page.url.pathname.startsWith('/agent/chat') && !!agentLayerBase;
+		const useAgentLayerUpstream =
+			($page.url.pathname.startsWith('/agent/chat') || persistedAgentLayerChannel) &&
+			!!agentLayerBase;
 
 		if (useAgentLayerUpstream) {
 			const mergedParams = { ...($settings?.params ?? {}), ...params };
 			const openAiBody: Record<string, unknown> = {
-				model: model.id,
+				model: AGENT_LAYER_DELEGATED_MODEL_ID,
 				messages,
 				stream
 			};
@@ -1648,7 +1695,7 @@
 				openAiBody.stream_options = { include_usage: true };
 			}
 
-			if ($page.url.pathname.startsWith('/agent/chat')) {
+			if (agentRouteActive) {
 				const stepFromUrl = $page.url.searchParams.get('agent_step_mode') === '1';
 				const stepFromSettings = $settings?.agentLayer?.defaults?.pauseBetweenRounds === true;
 				if (stepFromUrl || stepFromSettings) {
@@ -1776,6 +1823,9 @@
 						history.messages[responseMessageId] = responseMessage;
 					}
 
+					applyResolvedModelFromCompletionToMessage(data, responseMessage, resolveModel);
+					history.messages[responseMessageId] = responseMessage;
+
 					await finalizeDirectAgentSuccess();
 				} catch (e: any) {
 					if (!wsController.signal.aborted) {
@@ -1835,6 +1885,8 @@
 				if (typeof text === 'string') {
 					responseMessage.content = text;
 				}
+				applyResolvedModelFromCompletionToMessage(data, responseMessage, resolveModel);
+				history.messages[responseMessageId] = responseMessage;
 			} catch (e) {
 				await finalizeDirectAgentError({ detail: String(e) });
 				return;
@@ -1845,7 +1897,7 @@
 		}
 
 		// Agent chat must never use WebUI / Ollama routing — only Agent Layer API.
-		if ($page.url.pathname.startsWith('/agent/chat')) {
+		if (agentRouteActive) {
 			await handleOpenAIError(
 				{
 					detail: $i18n.t(
@@ -2186,6 +2238,7 @@
 		let _chatId = $chatId;
 
 		if (!$temporaryChatEnabled) {
+			const agentNewChat = get(page).url.pathname.startsWith('/agent/chat');
 			chat = await createNewChat(localStorage.token, {
 				id: _chatId,
 				title: $i18n.t('New Chat'),
@@ -2195,7 +2248,8 @@
 				history: history,
 				messages: createMessagesList(history, history.currentId),
 				tags: [],
-				timestamp: Date.now()
+				timestamp: Date.now(),
+				...(agentNewChat ? { [AGENT_LAYER_CHAT_CHANNEL_KEY]: true } : {})
 			});
 
 			_chatId = chat.id;
@@ -2204,7 +2258,11 @@
 			await chats.set(await getChatList(localStorage.token, $currentChatPage));
 			currentChatPage.set(1);
 
-			window.history.replaceState(history.state, '', `/c/${_chatId}`);
+			window.history.replaceState(
+				history.state,
+				'',
+				agentNewChat ? `/agent/chat/${_chatId}` : `/c/${_chatId}`
+			);
 		} else {
 			_chatId = 'local';
 			await chatId.set('local');
@@ -2217,12 +2275,15 @@
 	const saveChatHandler = async (_chatId, history) => {
 		if ($chatId == _chatId) {
 			if (!$temporaryChatEnabled) {
+				const persistAgentChannel =
+					get(page).url.pathname.startsWith('/agent/chat') || persistedAgentLayerChannel;
 				chat = await updateChatById(localStorage.token, _chatId, {
 					models: selectedModels,
 					history: history,
 					messages: createMessagesList(history, history.currentId),
 					params: params,
-					files: chatFiles
+					files: chatFiles,
+					...(persistAgentChannel ? { [AGENT_LAYER_CHAT_CHANNEL_KEY]: true } : {})
 				});
 				currentChatPage.set(1);
 				await chats.set(await getChatList(localStorage.token, $currentChatPage));
@@ -2299,6 +2360,7 @@
 					title={$chatTitle}
 					bind:selectedModels
 					modelSelectorModels={modelPickerModels}
+					showModelSelector={!agentRouteActive}
 					shareEnabled={!!history.currentId}
 					{initNewChat}
 				/>
@@ -2337,7 +2399,7 @@
 						</div>
 
 						<div class=" pb-[1rem]">
-							{#if $page.url.pathname.startsWith('/agent/chat') && agentLayerStepWaitPending}
+							{#if agentRouteActive && agentLayerStepWaitPending}
 								<div
 									class="mb-2 mx-1 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200/90 dark:border-amber-900/60 bg-amber-50/90 dark:bg-amber-950/40 px-3 py-2 text-sm"
 								>
