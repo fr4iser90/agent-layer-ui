@@ -109,6 +109,9 @@
 	 */
 	export let modelPickerModels: Model[] | null = null;
 
+	/** When true, fill a flex parent (`flex-1 min-h-0`) instead of `100vh` — e.g. Agent chat under a toolbar. */
+	export let fillContainer = false;
+
 	$: modelListForChat = modelPickerModels === null ? $models : modelPickerModels;
 
 	/** Resolve model for chat flows; picker may list Agent Layer models not present in global $models. */
@@ -2322,7 +2325,9 @@
 />
 
 <div
-	class="h-screen max-h-[100dvh] transition-width duration-200 ease-in-out {$showSidebar
+	class="{fillContainer
+		? 'h-full min-h-0'
+		: 'h-screen max-h-[100dvh]'} relative transition-width duration-200 ease-in-out {$showSidebar
 		? '  md:max-w-[calc(100%-260px)]'
 		: ' '} w-full max-w-full flex flex-col"
 	id="chat-container"

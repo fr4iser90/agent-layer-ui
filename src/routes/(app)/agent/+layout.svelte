@@ -81,7 +81,11 @@
 			</div>
 		</nav>
 
-		<div class="pb-1 px-[18px] flex-1 max-h-full overflow-y-auto">
+		<div
+			class="pb-1 px-[18px] flex-1 min-h-0 flex flex-col {$page.url.pathname.includes('/agent/chat')
+				? 'overflow-hidden'
+				: 'overflow-y-auto'}"
+		>
 			<slot />
 		</div>
 	</div>

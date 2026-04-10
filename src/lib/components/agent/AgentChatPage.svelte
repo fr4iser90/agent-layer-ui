@@ -197,47 +197,56 @@
 </script>
 
 <Help />
-<div class="mt-2 mb-2">
-	<div class="flex flex-wrap items-center justify-between gap-2">
-		<div class="flex items-center gap-2">
-			<div class="text-sm font-semibold">Agent</div>
-			<div class="text-xs text-gray-500 dark:text-gray-400">
-				{getAgentModelIds().length} agent model(s) available
+<div class="flex flex-col flex-1 min-h-0 w-full overflow-hidden gap-1.5">
+	<div class="flex-none min-w-0">
+		<div
+			class="flex flex-nowrap items-center justify-between gap-2 overflow-x-auto pb-0.5 scrollbar-none touch-pan-x"
+		>
+			<div class="flex items-center gap-2 shrink-0">
+				<div class="text-sm font-semibold">Agent</div>
+				<div class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+					{getAgentModelIds().length} agent model(s) available
+				</div>
+				<button
+					class="text-xs px-2 py-1 rounded-full bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium shrink-0"
+					type="button"
+					on:click={() => {
+						showAgentPanel = !showAgentPanel;
+					}}
+				>
+					Tools: {agentTools.length}
+				</button>
 			</div>
-			<button
-				class="ml-1 text-xs px-2 py-1 rounded-full bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium"
-				type="button"
-				on:click={() => {
-					showAgentPanel = !showAgentPanel;
-				}}
-			>
-				Tools: {agentTools.length}
-			</button>
-		</div>
 
-		<div class="flex flex-wrap items-center gap-3">
-			<label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none">
-				<input
-					type="checkbox"
-					class="rounded border-gray-300 dark:border-gray-600"
-					checked={stepModeOn}
-					on:change={(e) => syncStepModeToUrl(e.currentTarget.checked)}
-				/>
-				<span>{$i18n.t('Pause between tool rounds (WebSocket)')}</span>
-			</label>
-			<button
-				class="text-xs px-3 py-1.5 rounded-full bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium"
-				type="button"
-				on:click={useAgentModelsNow}
-				disabled={getAgentModelIds().length === 0}
-			>
-				Use agent models
-			</button>
+			<div class="flex items-center gap-2 sm:gap-3 shrink-0">
+				<label
+					class="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 cursor-pointer select-none whitespace-nowrap"
+				>
+					<input
+						type="checkbox"
+						class="rounded border-gray-300 dark:border-gray-600 shrink-0"
+						checked={stepModeOn}
+						on:change={(e) => syncStepModeToUrl(e.currentTarget.checked)}
+					/>
+					<span class="hidden sm:inline">{$i18n.t('Pause between tool rounds (WebSocket)')}</span>
+					<span class="sm:hidden">{$i18n.t('STEP')}</span>
+				</label>
+				<button
+					class="text-xs px-3 py-1.5 rounded-full bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-850 transition font-medium whitespace-nowrap"
+					type="button"
+					on:click={useAgentModelsNow}
+					disabled={getAgentModelIds().length === 0}
+				>
+					Use agent models
+				</button>
+			</div>
 		</div>
 	</div>
 
 	{#if showAgentPanel}
-		<div class="mt-2 rounded-xl border border-gray-100 dark:border-gray-850 bg-white/50 dark:bg-gray-950/50 p-3">
+		<div
+			class="flex-none min-h-0 max-h-[min(40vh,22rem)] overflow-y-auto overscroll-contain rounded-xl border border-gray-100 dark:border-gray-850 bg-white/50 dark:bg-gray-950/50 p-3"
+		>
 			<div class="flex flex-wrap items-center justify-between gap-2">
 				<div class="text-sm font-semibold">Agent Tools & Categories</div>
 				<div class="flex gap-2">
@@ -302,7 +311,7 @@
 					{:else if agentTools.length === 0}
 						<div class="mt-1 text-xs text-gray-500 dark:text-gray-400">No tools found.</div>
 					{:else}
-						<div class="mt-2 max-h-40 overflow-auto scrollbar-hidden rounded-lg border border-gray-100 dark:border-gray-850">
+						<div class="mt-2 max-h-32 sm:max-h-36 overflow-auto scrollbar-hidden rounded-lg border border-gray-100 dark:border-gray-850">
 							{#each agentTools as tool, idx (idx)}
 								<div class="px-2.5 py-1.5 text-xs border-b border-gray-50 dark:border-gray-900 last:border-b-0">
 									<div class="font-medium">{tool?.function?.name ?? tool?.name ?? 'tool'}</div>
@@ -319,5 +328,8 @@
 			</div>
 		</div>
 	{/if}
+
+	<div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+		<Chat fillContainer modelPickerModels={agentLayerPickerModels} {chatIdProp} />
+	</div>
 </div>
-<Chat modelPickerModels={agentLayerPickerModels} {chatIdProp} />
