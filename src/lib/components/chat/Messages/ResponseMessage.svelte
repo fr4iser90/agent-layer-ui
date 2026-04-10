@@ -143,6 +143,16 @@
 	let model = null;
 	$: model = $models.find((m) => m.id === message.model);
 
+	/** Bubble title: show routing hint when Agent Layer sent `model_resolution`. */
+	$: modelHeaderTooltip = (() => {
+		const base = model?.name ?? message.model;
+		const tag = message.agentLayerMeta?.model_resolution;
+		if (typeof tag === 'string' && tag.trim()) {
+			return `${base} · ${tag.trim()}`;
+		}
+		return base;
+	})();
+
 	let edit = false;
 	let editedContent = '';
 	let editTextAreaElement: HTMLTextAreaElement;
@@ -601,7 +611,7 @@
 
 		<div class="flex-auto w-0 pl-1">
 			<Name>
-				<Tooltip content={model?.name ?? message.model} placement="top-start">
+				<Tooltip content={modelHeaderTooltip} placement="top-start">
 					<span class="line-clamp-1 text-black dark:text-white">
 						{model?.name ?? message.model}
 					</span>

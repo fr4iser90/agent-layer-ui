@@ -7,6 +7,10 @@ export type AgentLayerCompletionMeta = {
 	forwarded_tool_count?: number;
 	routed_category?: string;
 	router_categories?: string[];
+	/** Ollama (or backend) model id actually used — from `agent.session` or `agent_layer` JSON. */
+	effective_model?: string;
+	/** Short routing tag, e.g. `profile:default`, `override:body`. */
+	model_resolution?: string;
 };
 
 function splitCsv(v: string): string[] {
@@ -56,12 +60,22 @@ export function parseAgentLayerFromJson(agentLayer: unknown): AgentLayerCompleti
 			? j.forwarded_tool_count
 			: undefined;
 	const routed_category = typeof j.routed_category === 'string' ? j.routed_category : undefined;
+	const effective_model =
+		typeof j.effective_model === 'string' && j.effective_model.trim()
+			? j.effective_model.trim()
+			: undefined;
+	const model_resolution =
+		typeof j.model_resolution === 'string' && j.model_resolution.trim()
+			? j.model_resolution.trim()
+			: undefined;
 
 	if (
 		!forwarded_tools?.length &&
 		forwarded_tool_count === undefined &&
 		!routed_category &&
-		!router_categories?.length
+		!router_categories?.length &&
+		!effective_model &&
+		!model_resolution
 	) {
 		return null;
 	}
@@ -70,7 +84,33 @@ export function parseAgentLayerFromJson(agentLayer: unknown): AgentLayerCompleti
 		forwarded_tools,
 		forwarded_tool_count,
 		routed_category,
-		router_categories
+		router_categories,
+		effective_model,
+		model_resolution
+	};
+}
+
+/** Merge `effective_model` / `model_resolution` from a WebSocket `agent.session` frame into meta. */
+export function mergeAgentSessionPayloadIntoMeta(
+	prev: AgentLayerCompletionMeta | undefined,
+	msg: Record<string, unknown>
+): AgentLayerCompletionMeta | undefined {
+	const t = String(msg.type ?? msg.event ?? msg.kind ?? '');
+	if (t !== 'agent.session' && t !== 'agent_session') return prev;
+
+	const emRaw = msg.effective_model;
+	const mrRaw = msg.model_resolution;
+	const effective_model =
+		typeof emRaw === 'string' && emRaw.trim() ? emRaw.trim() : undefined;
+	const model_resolution =
+		typeof mrRaw === 'string' && mrRaw.trim() ? mrRaw.trim() : undefined;
+
+	if (!effective_model && !model_resolution) return prev;
+
+	return {
+		...(prev ?? {}),
+		...(effective_model ? { effective_model } : {}),
+		...(model_resolution ? { model_resolution } : {})
 	};
 }
 
@@ -97,6 +137,8 @@ export function mergeAgentLayerCompletionMeta(
 		router_categories:
 			fromJson?.router_categories && fromJson.router_categories.length > 0
 				? fromJson.router_categories
-				: fromHeaders?.router_categories
+				: fromHeaders?.router_categories,
+		effective_model: fromJson?.effective_model,
+		model_resolution: fromJson?.model_resolution
 	};
 }

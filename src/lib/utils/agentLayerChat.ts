@@ -20,3 +20,20 @@ export function applyResolvedModelFromCompletionToMessage(
 	const m = resolveModel(id);
 	message.modelName = String(m?.name ?? m?.id ?? id);
 }
+
+/**
+ * Prefer Agent Layer routing truth (`agent.session` / `agent_layer.effective_model`) over
+ * OpenAI-shaped `model` (often the WebUI picker id, not the Ollama id).
+ */
+export function applyEffectiveModelFromAgentLayerMeta(
+	message: { model?: string; modelName?: string },
+	meta: { effective_model?: string } | undefined,
+	resolveModel: (id: string) => { name?: string; id?: string } | undefined
+): void {
+	const raw = meta?.effective_model;
+	if (typeof raw !== 'string' || !raw.trim()) return;
+	const id = raw.trim();
+	message.model = id;
+	const m = resolveModel(id);
+	message.modelName = String(m?.name ?? m?.id ?? id);
+}

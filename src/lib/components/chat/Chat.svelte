@@ -69,9 +69,14 @@
 	import {
 		AGENT_LAYER_CHAT_CHANNEL_KEY,
 		AGENT_LAYER_DELEGATED_MODEL_ID,
+		applyEffectiveModelFromAgentLayerMeta,
 		applyResolvedModelFromCompletionToMessage
 	} from '$lib/utils/agentLayerChat';
-	import { agentLayerMetaFromChatCompletionData, mergeAgentLayerCompletionMeta } from '$lib/utils/agentLayerMeta';
+	import {
+		agentLayerMetaFromChatCompletionData,
+		mergeAgentLayerCompletionMeta,
+		mergeAgentSessionPayloadIntoMeta
+	} from '$lib/utils/agentLayerMeta';
 	import {
 		runAgentLayerWsChatTurn,
 		sendAgentLayerWsContinueStep
@@ -1781,6 +1786,19 @@
 						},
 						onFrame: (msg) => {
 							const t = String(msg.type ?? msg.event ?? msg.kind ?? '');
+							const nextMeta = mergeAgentSessionPayloadIntoMeta(
+								responseMessage.agentLayerMeta,
+								msg as Record<string, unknown>
+							);
+							if (nextMeta !== responseMessage.agentLayerMeta) {
+								responseMessage.agentLayerMeta = nextMeta;
+								applyEffectiveModelFromAgentLayerMeta(
+									responseMessage,
+									nextMeta,
+									resolveModel
+								);
+								history.messages[responseMessageId] = responseMessage;
+							}
 							if (shouldRecordAgentLayerTimelineFrame(t)) {
 								responseMessage.agentLayerTimeline = [
 									...(responseMessage.agentLayerTimeline ?? []),
@@ -1814,9 +1832,17 @@
 						return;
 					}
 
-					const meta = agentLayerMetaFromChatCompletionData(data);
-					if (meta) {
-						responseMessage.agentLayerMeta = meta;
+					const metaFromCompletion = agentLayerMetaFromChatCompletionData(data);
+					if (metaFromCompletion) {
+						const prev = responseMessage.agentLayerMeta;
+						responseMessage.agentLayerMeta = {
+							...prev,
+							...metaFromCompletion,
+							effective_model:
+								metaFromCompletion.effective_model ?? prev?.effective_model,
+							model_resolution:
+								metaFromCompletion.model_resolution ?? prev?.model_resolution
+						};
 						history.messages[responseMessageId] = responseMessage;
 					}
 
@@ -1827,6 +1853,11 @@
 					}
 
 					applyResolvedModelFromCompletionToMessage(data, responseMessage, resolveModel);
+					applyEffectiveModelFromAgentLayerMeta(
+						responseMessage,
+						responseMessage.agentLayerMeta,
+						resolveModel
+					);
 					history.messages[responseMessageId] = responseMessage;
 
 					await finalizeDirectAgentSuccess();
@@ -1882,13 +1913,24 @@
 				}
 				const mergedMeta = mergeAgentLayerCompletionMeta(fetchRes, data.agent_layer);
 				if (mergedMeta) {
-					responseMessage.agentLayerMeta = mergedMeta;
+					const prev = responseMessage.agentLayerMeta;
+					responseMessage.agentLayerMeta = {
+						...prev,
+						...mergedMeta,
+						effective_model: mergedMeta.effective_model ?? prev?.effective_model,
+						model_resolution: mergedMeta.model_resolution ?? prev?.model_resolution
+					};
 				}
 				const text = data.choices?.[0]?.message?.content ?? '';
 				if (typeof text === 'string') {
 					responseMessage.content = text;
 				}
 				applyResolvedModelFromCompletionToMessage(data, responseMessage, resolveModel);
+				applyEffectiveModelFromAgentLayerMeta(
+					responseMessage,
+					responseMessage.agentLayerMeta,
+					resolveModel
+				);
 				history.messages[responseMessageId] = responseMessage;
 			} catch (e) {
 				await finalizeDirectAgentError({ detail: String(e) });

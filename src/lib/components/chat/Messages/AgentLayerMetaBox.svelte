@@ -38,8 +38,22 @@
 				{$i18n.t('tools forwarded')}
 			</span>
 		{/if}
+		{#if meta.effective_model}
+			<span
+				class="px-1.5 py-0.5 rounded-md bg-white/90 dark:bg-gray-800/90 border border-gray-200/80 dark:border-gray-600/50 font-mono text-[0.7rem]"
+				title={meta.model_resolution ?? $i18n.t('Effective model (Agent Layer)')}
+			>
+				{meta.effective_model}
+			</span>
+		{/if}
 	</summary>
 	<div class="px-2.5 pb-2 pt-0 space-y-1.5 border-t border-gray-200/60 dark:border-gray-700/50">
+		{#if meta.model_resolution}
+			<div>
+				<span class="text-gray-500 dark:text-gray-400">{$i18n.t('Model resolution')}:</span>
+				<span class="ml-1 font-mono text-[0.7rem] break-all">{meta.model_resolution}</span>
+			</div>
+		{/if}
 		{#if cats}
 			<div>
 				<span class="text-gray-500 dark:text-gray-400">{$i18n.t('Router categories')}:</span>
